@@ -35,7 +35,7 @@ def query_asu_api(query, model="gpt4o_mini"):
             "system_prompt": "You are a helpful assistant."
         },
         "query": query,
-        "enable_history": True,
+        "enable_history": False,
         "semantic_caching": False
     }
 
