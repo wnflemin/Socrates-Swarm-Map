@@ -1,2 +1,4 @@
-streamlit
-openai
+streamlit           # For the web UI
+requests            # To handle API requests to the ASU API
+networkx            # To create and manage the mind map
+matplotlib          # For visualizing the mind map

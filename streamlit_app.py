@@ -1,56 +1,104 @@
 import streamlit as st
-from openai import OpenAI
+import requests
+import networkx as nx
+import matplotlib.pyplot as plt
+import time  # For streaming simulation, if needed
 
-# Show title and description.
-st.title("💬 Chatbot")
-st.write(
-    "This is a simple chatbot that uses OpenAI's GPT-3.5 model to generate responses. "
-    "To use this app, you need to provide an OpenAI API key, which you can get [here](https://platform.openai.com/account/api-keys). "
-    "You can also learn how to build this app step by step by [following our tutorial](https://docs.streamlit.io/develop/tutorials/llms/build-conversational-apps)."
-)
+# Initialize session state for messages and mind map
+if "messages" not in st.session_state:
+    st.session_state.messages = []
 
-# Ask user for their OpenAI API key via `st.text_input`.
-# Alternatively, you can store the API key in `./.streamlit/secrets.toml` and access it
-# via `st.secrets`, see https://docs.streamlit.io/develop/concepts/connections/secrets-management
-openai_api_key = st.text_input("OpenAI API Key", type="password")
-if not openai_api_key:
-    st.info("Please add your OpenAI API key to continue.", icon="🗝️")
-else:
+if "mind_map" not in st.session_state:
+    st.session_state.mind_map = nx.Graph()
 
-    # Create an OpenAI client.
-    client = OpenAI(api_key=openai_api_key)
+if "chat_updated" not in st.session_state:
+    st.session_state.chat_updated = False  # Track if chat window needs to be updated
 
-    # Create a session state variable to store the chat messages. This ensures that the
-    # messages persist across reruns.
-    if "messages" not in st.session_state:
-        st.session_state.messages = []
+# Fetch API keys from secrets
+asu_api_key = st.secrets["asu_api"]["asu_api_key"]
 
-    # Display the existing chat messages via `st.chat_message`.
-    for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
+# ASU API setup
+asu_base_url = "https://api-edplus-poc.aiml.asu.edu/queryV2"
+asu_headers = {
+    'Authorization': f'Bearer {asu_api_key}',
+    'Content-Type': 'application/json'
+}
 
-    # Create a chat input field to allow the user to enter a message. This will display
-    # automatically at the bottom of the page.
-    if prompt := st.chat_input("What is up?"):
+# Function to query ASU API
+def query_asu_api(query, model="gpt4o_mini"):
+    payload = {
+        "model_provider": "openai",
+        "model_name": model,
+        "model_params": {
+            "temperature": 0.7,
+            "max_tokens": 1500,
+            "system_prompt": "You are a helpful assistant."
+        },
+        "query": query,
+        "enable_history": True,
+        "semantic_caching": False
+    }
 
-        # Store and display the current prompt.
-        st.session_state.messages.append({"role": "user", "content": prompt})
-        with st.chat_message("user"):
-            st.markdown(prompt)
+    response = requests.post(asu_base_url, headers=asu_headers, json=payload)
 
-        # Generate a response using the OpenAI API.
-        stream = client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": m["role"], "content": m["content"]}
-                for m in st.session_state.messages
-            ],
-            stream=True,
-        )
+    if response.status_code == 200:
+        return response.json().get('response', "No 'response' in response JSON")
+    else:
+        st.error(f"Error querying ASU API: {response.status_code}")
+        return None
 
-        # Stream the response to the chat using `st.write_stream`, then store it in 
-        # session state.
-        with st.chat_message("assistant"):
-            response = st.write_stream(stream)
+# Function to stream response with write_stream
+def stream_response(response):
+    for word in response.split():
+        yield word + " "  # Stream word by word
+        time.sleep(0.05)  # Small delay to simulate real streaming
+
+# Function to update the mind map
+def update_mind_map(topic, related_topics=[]):
+    st.session_state.mind_map.add_node(topic)
+    for rel_topic in related_topics:
+        st.session_state.mind_map.add_edge(topic, rel_topic)
+
+# Function to display the mind map (Can be run in the background)
+def display_mind_map():
+    plt.figure(figsize=(8, 6))
+    pos = nx.spring_layout(st.session_state.mind_map)
+    nx.draw(st.session_state.mind_map, pos, with_labels=True, node_color='lightblue', font_size=10)
+    st.pyplot(plt)
+
+# Streamlit App UI
+st.set_page_config(page_title="Socratic Chatbot", page_icon="💬", layout="centered")
+st.title("🤖 Socratic Chatbot")
+
+# Display chat history using chat_message with custom avatars
+for message in st.session_state.messages:
+    avatar = ":material/surfing:" if message["role"] == "user" else ":material/raven:"  # Custom icons
+    with st.chat_message(message["role"], avatar=avatar):
+        st.markdown(message["content"])
+
+# Input from user
+user_input = st.chat_input("Learn About it...")
+
+if user_input and not st.session_state.chat_updated:
+    # Add user's message to chat and display it with a custom avatar
+    st.chat_message("user", avatar=":material/surfing:").markdown(user_input)
+    st.session_state.messages.append({"role": "user", "content": user_input})
+
+    # Set chat_updated to True to prevent further updates until the next input
+    st.session_state.chat_updated = True
+
+    # Query ASU API for response
+    response = query_asu_api(user_input)
+
+    # Add assistant's response to chat history and stream it with `write_stream`
+    if response:
         st.session_state.messages.append({"role": "assistant", "content": response})
+
+        with st.chat_message("assistant", avatar=":material/raven:"):
+            st.write_stream(stream_response(response))  # Use the native streaming method
+
+        # Perform mind map update in the background
+        update_mind_map(user_input, related_topics=[response])
+
+    # Reset chat_updated to allow the next message
+    st.session_state.chat_updated = False
